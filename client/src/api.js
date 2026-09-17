@@ -14,3 +14,11 @@ export async function saveCompletion(playerId, levelIndex, moves, timeRemaining)
   if (!response.ok) throw new Error('Progress save failed');
   return response.json();
 }
+
+export async function resetProgress(playerId) {
+  const response = await fetch(`${API}/progress/${encodeURIComponent(playerId)}`, {
+    method: 'DELETE'
+  });
+  if (!response.ok) throw new Error('Progress reset failed');
+  return response.json();
+}

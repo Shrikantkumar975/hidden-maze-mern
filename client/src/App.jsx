@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createLevel, DIRS, edgeKey, keyFor, LEVELS } from './game';
-import { loadProgress, saveCompletion } from './api';
+import { loadProgress, resetProgress, saveCompletion } from './api';
 import './styles.css';
 
 const playerId = (() => {
@@ -11,8 +11,101 @@ const playerId = (() => {
   return id;
 })();
 
+const BUBBLE_ROUND_SECONDS = 15;
+const BUBBLE_SESSION_SECONDS = 7 * 60;
+
+function formatNumber(value) {
+  return Number(value.toFixed(1)).toString();
+}
+
+function randomDecimalOperand() {
+  return Number((Math.random() * 20 + 1).toFixed(1));
+}
+
+function randomIntegerOperand() {
+  return Math.floor(Math.random() * 12) + 1;
+}
+
+function createArithmeticBubble(roundNumber, index) {
+  const operator = ['+', '-', '*', '/'][Math.floor(Math.random() * 4)];
+
+  let operandA;
+  let operandB;
+  let value;
+  let label;
+
+  if (operator === '+') {
+    operandA = randomDecimalOperand();
+    operandB = randomDecimalOperand();
+    value = operandA + operandB;
+    label = `${formatNumber(operandA)} + ${formatNumber(operandB)}`;
+  } else if (operator === '-') {
+    operandA = randomDecimalOperand();
+    operandB = randomDecimalOperand();
+    const bigger = Math.max(operandA, operandB);
+    const smaller = Math.min(operandA, operandB);
+    value = bigger - smaller;
+    label = `${formatNumber(bigger)} - ${formatNumber(smaller)}`;
+  } else if (operator === '*') {
+    operandA = randomIntegerOperand();
+    operandB = randomIntegerOperand();
+    value = operandA * operandB;
+    label = `${operandA} × ${operandB}`;
+  } else {
+    const divisor = randomIntegerOperand();
+    const quotient = randomIntegerOperand();
+    operandA = quotient * divisor;
+    operandB = divisor;
+    value = operandA / operandB;
+    label = `${operandA} ÷ ${operandB}`;
+  }
+
+  return {
+    id: `${roundNumber}-${index}-${label}-${Math.random().toString(36).slice(2)}`,
+    value: Number(value.toFixed(2)),
+    label,
+    tone: ['cyan', 'yellow', 'green'][index]
+  };
+}
+
+function bubbleSortAscending(values) {
+  const sorted = [...values];
+  for (let i = 0; i < sorted.length; i += 1) {
+    let swapped = false;
+    for (let j = 0; j < sorted.length - i - 1; j += 1) {
+      if (sorted[j] > sorted[j + 1]) {
+        [sorted[j], sorted[j + 1]] = [sorted[j + 1], sorted[j]];
+        swapped = true;
+      }
+    }
+    if (!swapped) break;
+  }
+  return sorted;
+}
+
+function createBubbleRound(roundNumber) {
+  const used = new Set();
+  const values = [];
+
+  while (values.length < 3) {
+    const bubble = createArithmeticBubble(roundNumber, values.length);
+    if (!used.has(bubble.value)) {
+      used.add(bubble.value);
+      values.push(bubble);
+    }
+  }
+
+  return values;
+}
+
+function formatClock(totalSeconds) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
 function App() {
-  const [screen, setScreen] = useState('menu');
+  const [screen, setScreen] = useState('home');
   const [levelIndex, setLevelIndex] = useState(0);
   const [game, setGame] = useState(() => createLevel(0));
   const [completed, setCompleted] = useState(() => JSON.parse(localStorage.getItem('hiddenMazeCompleted') || '[]'));
@@ -42,7 +135,7 @@ function App() {
     setMessage('Move one tile at a time.');
     setMessageType('');
     setModal(null);
-    setScreen('game');
+    setScreen('maze-game');
   }, []);
 
   const resetLevel = useCallback(() => {
@@ -76,15 +169,6 @@ function App() {
       action: final ? 'replay' : 'next'
     });
   }, [levelIndex]);
-
-  const restartAfterWall = useCallback((current) => {
-    const next = {
-      ...current,
-      player: { ...current.start },
-      visited: new Set([keyFor(current.start.r, current.start.c)])
-    };
-    setGame(next);
-  }, []);
 
   const attemptMove = useCallback((name) => {
     setGame((current) => {
@@ -128,7 +212,7 @@ function App() {
   }, [finishLevel, modal, showToast]);
 
   useEffect(() => {
-    if (screen !== 'game' || modal) return;
+    if (screen !== 'maze-game' || modal) return;
     timerRef.current = setInterval(() => {
       setGame((current) => {
         const remaining = Math.max(0, current.remaining - 0.1);
@@ -146,29 +230,46 @@ function App() {
   useEffect(() => {
     const map = { ArrowUp:'up',w:'up',W:'up', ArrowDown:'down',s:'down',S:'down', ArrowLeft:'left',a:'left',A:'left', ArrowRight:'right',d:'right',D:'right' };
     const onKey = (event) => {
+      if (screen !== 'maze-game') return;
       if (!map[event.key]) return;
       event.preventDefault();
       attemptMove(map[event.key]);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [attemptMove]);
+  }, [attemptMove, screen]);
 
   const unlocked = game.collected.size === game.keys.length;
   const progressCount = completed.length;
   const highest = completed.length ? Math.max(...completed) + 1 : 0;
 
-  const openMenu = () => { clearInterval(timerRef.current); setModal(null); setScreen('menu'); };
+  const openHome = () => { clearInterval(timerRef.current); setModal(null); setScreen('home'); };
+  const openMenu = () => { clearInterval(timerRef.current); setModal(null); setScreen('maze-menu'); };
   const nextLevel = () => startLevel(Math.min(LEVELS.length - 1, levelIndex + 1));
+  const isMazeScreen = screen === 'maze-menu' || screen === 'maze-game';
+  const brandCopy = screen === 'bubble'
+    ? { title: 'Bubble Sort Practice', text: 'Order fast. Stay accurate.' }
+    : isMazeScreen
+      ? { title: 'Hidden Maze Challenge', text: 'Remember the path. Trust nothing.' }
+      : { title: 'Practice Arcade', text: 'Choose a challenge and sharpen up.' };
 
   return <div className="app">
     <div className="shell">
       <header className="topbar">
-        <div className="brand"><div className="brand-mark">⌁</div><div><strong>Hidden Maze Challenge</strong><span>Remember the path. Trust nothing.</span></div></div>
-        <button className="btn ghost" onClick={openMenu}>Levels</button>
+        <div className="brand"><div className="brand-mark">⌁</div><div><strong>{brandCopy.title}</strong><span>{brandCopy.text}</span></div></div>
+        <div className="top-actions">
+          {screen === 'maze-game' && <button className="btn ghost" onClick={openMenu}>Levels</button>}
+          {screen !== 'home' && <button className="btn ghost" onClick={openHome}>Games</button>}
+        </div>
       </header>
 
-      {screen === 'menu' ? <MenuScreen completed={completed} onStart={startLevel} progressCount={progressCount} continueIndex={Math.min(19, highest)} onReset={() => { setCompleted([]); localStorage.removeItem('hiddenMazeCompleted'); showToast('Progress reset.'); }} /> :
+      {screen === 'home' ? <HomeScreen onMaze={() => setScreen('maze-menu')} onBubble={() => setScreen('bubble')} progressCount={progressCount} /> :
+      screen === 'maze-menu' ? <MenuScreen completed={completed} onStart={startLevel} progressCount={progressCount} continueIndex={Math.min(19, highest)} onReset={() => {
+        setCompleted([]);
+        localStorage.removeItem('hiddenMazeCompleted');
+        resetProgress(playerId).then(() => showToast('Progress reset.')).catch(() => showToast('Local progress reset.'));
+      }} /> :
+      screen === 'bubble' ? <BubbleSortPractice onExit={openHome} /> :
       <GameScreen game={game} levelIndex={levelIndex} unlocked={unlocked} message={message} messageType={messageType} onMove={attemptMove} onRestart={resetLevel} onMenu={openMenu} />}
     </div>
 
@@ -185,11 +286,37 @@ function App() {
   </div>;
 }
 
+function HomeScreen({ onMaze, onBubble, progressCount }) {
+  return <section className="screen active">
+    <div className="hub">
+      <div className="hub-copy">
+        <div className="eyebrow">Two quick challenges</div>
+        <h1>Pick your practice.</h1>
+        <p>Train memory with hidden paths or train ordering speed with timed bubble rounds.</p>
+      </div>
+      <div className="game-cards">
+        <button className="game-card maze-card" onClick={onMaze}>
+          <span className="game-card-label">Memory maze</span>
+          <strong>Hidden Maze Challenge</strong>
+          <small>{progressCount} / 20 levels cleared</small>
+          <div className="game-card-art maze-art" aria-hidden="true">{Array.from({ length: 16 }).map((_, i) => <i key={i} className={[1, 5, 6, 10].includes(i) ? 'on' : ''}></i>)}</div>
+        </button>
+        <button className="game-card bubble-card" onClick={onBubble}>
+          <span className="game-card-label">Ordering sprint</span>
+          <strong>Bubble Sort Practice</strong>
+          <small>3 bubbles · 15 second rounds · 7 minute session</small>
+          <div className="game-card-art bubble-art" aria-hidden="true"><i>18</i><i>42</i><i>77</i></div>
+        </button>
+      </div>
+    </div>
+  </section>;
+}
+
 function MenuScreen({ completed, onStart, progressCount, continueIndex, onReset }) {
   return <section className="screen active"><div className="hero">
     <div className="hero-copy"><div><div className="eyebrow">A memory-first maze</div><h1>Find the route you can't see.</h1><p>The walls are hidden. Your footsteps are not. Reach every key, unlock the door, and build a map in your head before the clock runs dry.</p>
       <div className="cta-row"><button className="btn primary" onClick={() => onStart(continueIndex)}>{completed.length === 20 ? 'Replay final level' : `Continue · Level ${continueIndex + 1}`}</button><button className="btn" onClick={onReset}>Reset progress</button></div>
-      <div className="mini-preview" aria-hidden="true">{Array.from({length:24}).map((_,i)=><i key={i} className={[1,2,7,8,9,14,15].includes(i)?'trail':i===9?'player':i===3?'key':i===17?'door':''}></i>)}</div>
+      <div className="mini-preview" aria-hidden="true">{Array.from({length:24}).map((_,i)=><i key={i} className={i===9?'player':[1,2,7,8,14,15].includes(i)?'trail':i===3?'key':i===17?'door':''}></i>)}</div>
     </div><div className="hero-foot">Keyboard: arrows / WASD · Mouse: click an adjacent tile · Mobile: D-pad</div></div>
     <div className="progress-panel"><div className="panel-head"><div><h2>Challenge map</h2><p>Choose any unlocked level.</p></div><div className="progress-count">{progressCount} / 20 cleared</div></div>
       <div className="levels">{LEVELS.map((level,i) => {const open=i===0 || completed.includes(i-1) || completed.includes(i); const done=completed.includes(i); return <button key={i} disabled={!open} className={`level-btn ${i===continueIndex?'current ':''}${done?'done ':''}${open?'':'locked'}`} onClick={()=>onStart(i)}><div className="num">{String(i+1).padStart(2,'0')}</div><small>{level.size}×{level.size} · {level.keys} key{level.keys>1?'s':''}</small></button>})}</div>
@@ -219,5 +346,199 @@ function GameScreen({game,levelIndex,unlocked,message,messageType,onMove,onResta
   </div></section>;
 }
 function Stat({label,value}){return <div className="stat"><span>{label}</span><strong>{value}</strong></div>}
+
+function BubbleSortPractice({ onExit }) {
+  const [mode, setMode] = useState('intro');
+  const [roundNumber, setRoundNumber] = useState(1);
+  const [round, setRound] = useState(() => createBubbleRound(1));
+  const [selected, setSelected] = useState([]);
+  const [roundTime, setRoundTime] = useState(BUBBLE_ROUND_SECONDS);
+  const [sessionTime, setSessionTime] = useState(BUBBLE_SESSION_SECONDS);
+  const [stats, setStats] = useState({ played: 0, correct: 0, wrong: 0 });
+  const [feedback, setFeedback] = useState('Select bubbles from lowest to highest.');
+  const [isAdvancing, setIsAdvancing] = useState(false);
+  const selectedRef = useRef(selected);
+  const roundRef = useRef(round);
+  const advancingRef = useRef(isAdvancing);
+  const sessionTimeRef = useRef(sessionTime);
+
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
+  useEffect(() => { roundRef.current = round; }, [round]);
+  useEffect(() => { advancingRef.current = isAdvancing; }, [isAdvancing]);
+  useEffect(() => { sessionTimeRef.current = sessionTime; }, [sessionTime]);
+
+  const startSession = useCallback(() => {
+    const firstRound = createBubbleRound(1);
+    setMode('practice');
+    setRoundNumber(1);
+    setRound(firstRound);
+    setSelected([]);
+    setRoundTime(BUBBLE_ROUND_SECONDS);
+    setSessionTime(BUBBLE_SESSION_SECONDS);
+    setStats({ played: 0, correct: 0, wrong: 0 });
+    setFeedback('Select bubbles from lowest to highest.');
+    setIsAdvancing(false);
+  }, []);
+
+  const completeRound = useCallback((choice, timedOut = false) => {
+    if (advancingRef.current) return;
+    const orderedValues = bubbleSortAscending(roundRef.current.map((bubble) => bubble.value));
+    const ordered = orderedValues.map((value) => {
+      const bubble = roundRef.current.find((item) => item.value === value);
+      return bubble ? bubble.id : null;
+    }).filter(Boolean);
+    const correct = choice.length === 3 && choice.every((id, index) => id === ordered[index]);
+
+    setIsAdvancing(true);
+    setStats((current) => ({
+      played: current.played + 1,
+      correct: current.correct + (correct ? 1 : 0),
+      wrong: current.wrong + (correct ? 0 : 1)
+    }));
+    setFeedback(correct ? 'Correct. Next round.' : timedOut ? 'Time up. Next round.' : 'Wrong order. Next round.');
+
+    setTimeout(() => {
+      if (sessionTimeRef.current <= 0) return;
+      setRoundNumber((current) => {
+        const nextNumber = current + 1;
+        setRound(createBubbleRound(nextNumber));
+        return nextNumber;
+      });
+      setSelected([]);
+      setRoundTime(BUBBLE_ROUND_SECONDS);
+      setFeedback('Select bubbles from lowest to highest.');
+      setIsAdvancing(false);
+    }, 650);
+  }, []);
+
+  useEffect(() => {
+    if (mode !== 'practice') return;
+    const interval = setInterval(() => {
+      setSessionTime((current) => {
+        if (current <= 1) {
+          setMode('summary');
+          return 0;
+        }
+        return current - 1;
+      });
+      setRoundTime((current) => {
+        if (current <= 1) {
+          completeRound(selectedRef.current, true);
+          return 0;
+        }
+        return current - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [completeRound, mode]);
+
+  const toggleBubble = (bubbleId) => {
+    if (mode !== 'practice' || isAdvancing) return;
+    setSelected((current) => {
+      if (current.includes(bubbleId)) {
+        return current.filter((id) => id !== bubbleId);
+      }
+      if (current.length >= 3) return current;
+      const next = [...current, bubbleId];
+      if (next.length === 3) {
+        setTimeout(() => completeRound(next), 260);
+      }
+      return next;
+    });
+  };
+
+  const stopSession = () => {
+    setMode('summary');
+    setIsAdvancing(false);
+  };
+
+  const accuracy = stats.played ? Math.round((stats.correct / stats.played) * 100) : 0;
+
+  if (mode === 'intro') {
+    return <section className="screen active">
+      <div className="bubble-intro">
+        <div className="bubble-rules">
+          <div className="eyebrow">Timed ordering drill</div>
+          <h1>Bubble Sort Practice</h1>
+          <h2>How to Play</h2>
+          <ul>
+            <li>Select bubbles from <strong>LOWEST → HIGHEST</strong>.</li>
+            <li>You can <strong>unselect</strong> any bubble by tapping it again.</li>
+            <li>Each round has <strong>15 seconds</strong>.</li>
+            <li>Entire session lasts <strong>7 minutes</strong>.</li>
+            <li>After selecting 3 bubbles the round automatically advances.</li>
+            <li>Press <strong>Stop / Submit</strong> to view the session summary.</li>
+          </ul>
+          <button className="btn primary wide" onClick={startSession}>Let's Practice</button>
+        </div>
+        <div className="bubble-demo" aria-hidden="true">
+          <div className="demo-bubble small">12</div>
+          <div className="demo-bubble medium">45</div>
+          <div className="demo-bubble large">83</div>
+        </div>
+      </div>
+    </section>;
+  }
+
+  if (mode === 'summary') {
+    return <section className="screen active">
+      <div className="bubble-summary">
+        <div className="modal-icon">✓</div>
+        <h1>Session Summary</h1>
+        <div className="summary-grid">
+          <Stat label="Rounds Played" value={stats.played} />
+          <Stat label="Correct" value={stats.correct} />
+          <Stat label="Wrong" value={stats.wrong} />
+          <Stat label="Accuracy" value={`${accuracy}%`} />
+        </div>
+        <div className="modal-actions">
+          <button className="btn" onClick={onExit}>Games</button>
+          <button className="btn primary" onClick={startSession}>Practice Again</button>
+        </div>
+      </div>
+    </section>;
+  }
+
+  return <section className="screen active">
+    <div className="bubble-layout">
+      <aside className="side-card">
+        <div className="level-kicker">BUBBLE SESSION</div>
+        <h2 className="level-title">Round {roundNumber}</h2>
+        <Stat label="Session" value={formatClock(sessionTime)} />
+        <Stat label="Round" value={`${roundTime}s`} />
+        <Stat label="Correct" value={stats.correct} />
+        <Stat label="Wrong" value={stats.wrong} />
+        <div className="timer-wrap">
+          <div className="timer-row"><span>Round Time</span><strong className={`timer ${roundTime <= 4 ? 'warn' : ''}`}>{roundTime}</strong></div>
+          <div className="timer-bar"><div className={`timer-fill ${roundTime <= 4 ? 'warn' : ''}`} style={{ width: `${(roundTime / BUBBLE_ROUND_SECONDS) * 100}%` }} /></div>
+        </div>
+        <div className="side-actions single">
+          <button className="btn primary" onClick={stopSession}>Stop / Submit</button>
+        </div>
+      </aside>
+      <main className="game-board-card bubble-board-card">
+        <div className="board-top">
+          <div className={`board-message ${feedback.startsWith('Correct') ? 'good' : feedback.startsWith('Wrong') || feedback.startsWith('Time') ? 'bad' : ''}`}>{feedback}</div>
+          <div className="board-meta">{selected.length} / 3 selected</div>
+        </div>
+        <div className="bubble-stage">
+          {round.map((bubble) => {
+            const selectedIndex = selected.indexOf(bubble.id);
+            return <button key={bubble.id} className={`bubble-choice ${bubble.tone} ${selectedIndex >= 0 ? 'selected' : ''}`} onClick={() => toggleBubble(bubble.id)} disabled={isAdvancing}>
+              <span className="selection-badge">{selectedIndex >= 0 ? selectedIndex + 1 : ''}</span>
+              <strong>{bubble.label}</strong>
+            </button>;
+          })}
+        </div>
+        <div className="selection-tray">
+          {Array.from({ length: 3 }).map((_, index) => {
+            const bubble = round.find((item) => item.id === selected[index]);
+            return <div key={index} className="selection-slot"><span>{index + 1}</span><strong>{bubble ? bubble.label : '-'}</strong></div>;
+          })}
+        </div>
+      </main>
+    </div>
+  </section>;
+}
 
 export default App;
