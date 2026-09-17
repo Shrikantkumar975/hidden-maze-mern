@@ -15,7 +15,7 @@ const BUBBLE_ROUND_SECONDS = 15;
 const BUBBLE_SESSION_SECONDS = 7 * 60;
 const LEVEL_CLEAR_SOUND = '/audio/makabhosda_aag.mp3';
 const WALL_HIT_SOUND = '/audio/faahh.mp3';
-const GAME_OVER_SOUND = '/audio/funny_laugh.mp3';
+const GAME_OVER_SOUND = '/audio/game-over.mp3';
 
 function formatNumber(value) {
   return Number(value.toFixed(1)).toString();
