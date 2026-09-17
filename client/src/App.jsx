@@ -13,6 +13,9 @@ const playerId = (() => {
 
 const BUBBLE_ROUND_SECONDS = 15;
 const BUBBLE_SESSION_SECONDS = 7 * 60;
+const LEVEL_CLEAR_SOUND = '/audio/makabhosda_aag.mp3';
+const WALL_HIT_SOUND = '/audio/faahh.mp3';
+const GAME_OVER_SOUND = '/audio/funny_laugh.mp3';
 
 function formatNumber(value) {
   return Number(value.toFixed(1)).toString();
@@ -115,6 +118,44 @@ function App() {
   const [toast, setToast] = useState('');
   const timerRef = useRef(null);
   const toastTimerRef = useRef(null);
+  const levelClearAudioRef = useRef(null);
+  const wallHitAudioRef = useRef(null);
+  const gameOverAudioRef = useRef(null);
+
+  useEffect(() => {
+    levelClearAudioRef.current = new Audio(LEVEL_CLEAR_SOUND);
+    wallHitAudioRef.current = new Audio(WALL_HIT_SOUND);
+    gameOverAudioRef.current = new Audio(GAME_OVER_SOUND);
+    return () => {
+      levelClearAudioRef.current?.pause();
+      wallHitAudioRef.current?.pause();
+      gameOverAudioRef.current?.pause();
+      levelClearAudioRef.current = null;
+      wallHitAudioRef.current = null;
+      gameOverAudioRef.current = null;
+    };
+  }, []);
+
+  const playLevelClearSound = useCallback(() => {
+    const audio = levelClearAudioRef.current;
+    if (!audio) return;
+    audio.currentTime = 0;
+    audio.play().catch(() => {});
+  }, []);
+
+  const playWallHitSound = useCallback(() => {
+    const audio = wallHitAudioRef.current;
+    if (!audio) return;
+    audio.currentTime = 0;
+    audio.play().catch(() => {});
+  }, []);
+
+  const playGameOverSound = useCallback(() => {
+    const audio = gameOverAudioRef.current;
+    if (!audio) return;
+    audio.currentTime = 0;
+    audio.play().catch(() => {});
+  }, []);
 
   const showToast = useCallback((text) => {
     setToast(text);
@@ -146,6 +187,7 @@ function App() {
     if (timerRef.current) clearInterval(timerRef.current);
     setMessage('Door reached. Level cleared.');
     setMessageType('good');
+    playLevelClearSound();
     setGame(nextGame);
     setCompleted((old) => {
       const next = [...new Set([...old, levelIndex])].sort((a,b)=>a-b);
@@ -168,7 +210,7 @@ function App() {
       secondary: 'Level map',
       action: final ? 'replay' : 'next'
     });
-  }, [levelIndex]);
+  }, [levelIndex, playLevelClearSound]);
 
   const attemptMove = useCallback((name) => {
     setGame((current) => {
@@ -178,6 +220,7 @@ function App() {
       const nr = r + dr, nc = c + dc, size = current.spec.size;
 
       if (nr < 0 || nr >= size || nc < 0 || nc >= size || current.walls.has(edgeKey(r,c,nr,nc))) {
+        playWallHitSound();
         document.querySelector('.maze-shell')?.classList.remove('wall-hit');
         requestAnimationFrame(() => document.querySelector('.maze-shell')?.classList.add('wall-hit'));
         setTimeout(() => document.querySelector('.maze-shell')?.classList.remove('wall-hit'), 440);
@@ -209,7 +252,7 @@ function App() {
       }
       return next;
     });
-  }, [finishLevel, modal, showToast]);
+  }, [finishLevel, modal, playWallHitSound, showToast]);
 
   useEffect(() => {
     if (screen !== 'maze-game' || modal) return;
@@ -218,6 +261,7 @@ function App() {
         const remaining = Math.max(0, current.remaining - 0.1);
         if (remaining <= 0) {
           clearInterval(timerRef.current);
+          playGameOverSound();
           setModal({ icon:'⏳', title:'Time ran out', text:'The clock won this round. Restart and use your darker trail to remember the route.', primary:'Try again', secondary:'Level map', action:'retry' });
           return { ...current, remaining: 0 };
         }
@@ -225,7 +269,7 @@ function App() {
       });
     }, 100);
     return () => clearInterval(timerRef.current);
-  }, [screen, modal, levelIndex]);
+  }, [screen, modal, levelIndex, playGameOverSound]);
 
   useEffect(() => {
     const map = { ArrowUp:'up',w:'up',W:'up', ArrowDown:'down',s:'down',S:'down', ArrowLeft:'left',a:'left',A:'left', ArrowRight:'right',d:'right',D:'right' };

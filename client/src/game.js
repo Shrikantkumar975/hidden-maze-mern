@@ -87,7 +87,9 @@ function pickFarthest(dist,used,minDistance){
 }
 
 export function createLevel(index){
-  const spec=LEVELS[index], start={r:0,c:0}, walls=generateMaze(spec.size,spec.seed), dist=bfsDistances(spec.size,start,walls), used=new Set([keyFor(0,0)]), keys=[];
+  const baseSpec=LEVELS[index];
+  const spec={...baseSpec, time: 45 + (index * 10)};
+  const start={r:0,c:0}, walls=generateMaze(spec.size,spec.seed), dist=bfsDistances(spec.size,start,walls), used=new Set([keyFor(0,0)]), keys=[];
   for(let i=0;i<spec.keys;i++){const p=pickFarthest(dist,used,Math.max(1,Math.floor(spec.size*.8)+i));keys.push({r:p.r,c:p.c,id:i});used.add(p.k);}
   const exitPick=pickFarthest(dist,used,Math.max(2,spec.size));
   return {spec,start,player:{...start},exit:{r:exitPick.r,c:exitPick.c},keys,walls,visited:new Set([keyFor(0,0)]),collected:new Set(),moves:0,remaining:spec.time};
